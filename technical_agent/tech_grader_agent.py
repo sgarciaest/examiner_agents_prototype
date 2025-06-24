@@ -12,9 +12,8 @@ assert api_key, "Missing OPENAI_API_KEY in environment"
 openai.api_key = api_key
 
 # Default config
-DEFAULT_MODEL = "gpt-4o-mini"
-# DEFAULT_MODEL = "gpt-4-0125-preview"
-# DEFAULT_MODEL = "gpt-4o"
+# DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-4"
 
 DEFAULT_TEMPERATURE = 0
 DEFAULT_SEED = 42
@@ -36,24 +35,36 @@ Grading Instructions:
     - Completeness.
     - Clarity.
 - Assign a score for each answer:
-  - Use the point scale from the rubric, or if none is provided, use a default scale of 0-10 points.
+  - Use the point scale from the rubric, or if none is provided, use a default scale of 0-10 points. You will also have to provide the maximum score used.
 - Provide feedback for each answer:
   - Explain why the student received the score.
   - Offer suggestions for improvement if the answer is incomplete or incorrect.
 
-Respond ONLY with raw JSON (no markdown):
+Respond ONLY with raw JSON (no markdown). The format must be:
+
 {
   "question_1": {
     "score": X,
+    "max_score": M,
     "feedback": "..."
   },
   "question_2": {
     "score": Y,
+    "max_score": N,
     "feedback": "..."
   },
   ...
-  "total_score": Z
+  "total_score": Z,
+  "total_max_score": T
 }
+
+Where:
+- `score` is the student's score for that question.
+- `max_score` is the maximum possible score for that question.
+- `total_score` is the sum of all awarded scores.
+- `total_max_score` is the sum of all maximum scores.
+
+Use only numeric values for all scores.
 """.strip()
 
     user_prompt = f"""
@@ -84,7 +95,9 @@ def call_openai_chat(system: str, user: str) -> str:
             {"role": "user", "content": user}
         ],
         temperature=DEFAULT_TEMPERATURE,
-        seed=DEFAULT_SEED
+        top_p=1,
+        presence_penalty=0,
+        frequency_penalty=0,
     )
     return response.choices[0].message.content
 
