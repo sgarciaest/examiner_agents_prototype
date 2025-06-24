@@ -56,7 +56,7 @@ def grade_exam(rubric: str, questions: str, responses: str) -> dict:
         user_prompt = f"Questions:\n{questions}\n\nStudent Responses:\n{responses}"
 
     resp = call_with_backoff(
-        model="gpt-4-0613",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
