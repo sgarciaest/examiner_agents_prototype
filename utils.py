@@ -61,3 +61,6 @@ def extract_pdf_to_markdown(pdf_path):
                 markdown_output += "\n\n" + convert_table_to_markdown(table)
 
     return markdown_output.strip()
+
+# Create PDF report #TODO
+# def create_pdf_report(results: dict, output_path: Path):
