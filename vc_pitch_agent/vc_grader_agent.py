@@ -1,22 +1,27 @@
 import os
-import sys
 import json
+from typing import Optional, Tuple
+
 import openai
 import librosa
-import soundfile as sf
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load API key
 load_dotenv()
+api_key = os.getenv("OPENAI_API_KEY")
+assert api_key, "Missing OPENAI_API_KEY in environment"
+openai.api_key = api_key
 
-# Create cache directory
+# Config
+DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_TEMPERATURE = 0
+DEFAULT_SEED = 42
 CACHE_DIR = os.path.join(os.getcwd(), "cache")
-if not os.path.isdir(CACHE_DIR):
-    os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Grading rubric
-RUBRIC = """
-You are a seasoned VC pitch grader. For a {{duration}}-minute audio pitch, give each dimension a score from 1 (poor) to 10 (excellent), using the following anchors:
+# VC grading rubric
+RUBRIC_TEMPLATE = """
+You are a seasoned VC pitch grader. For a {duration:.1f}-minute audio pitch, give each dimension a score from 1 (poor) to 10 (excellent), using the following anchors:
 
 1. Problem Clarity  
    • 1–3: No clear problem stated, listener confused  
@@ -43,41 +48,45 @@ You are a seasoned VC pitch grader. For a {{duration}}-minute audio pitch, give 
    • 9–10: Engaging tone, ideal pacing (120–150 WPM), minimal pauses (<10 %)
 
 Return valid JSON EXACTLY in this format (no extra keys):
-{
+{{
   "Problem": <1–10>,
   "Market": <1–10>,
   "Solution": <1–10>,
   "Delivery": <1–10>,
   "Feedback": "<one sentence actionable feedback for each anchor>"
-}
+}}
 """
 
-# 1 – Transcribe with caching
-def transcribe(mp3_path: str) -> str:
-    """Return transcript from Whisper, caching results."""
+
+def transcribe_audio(mp3_path: str) -> str:
+    """
+    Transcribes the MP3 using Whisper and caches the result.
+    """
     cache_file = os.path.join(CACHE_DIR, os.path.basename(mp3_path) + ".txt")
     if os.path.exists(cache_file):
         return open(cache_file).read()
 
-    with open(mp3_path, "rb") as audio_file:
-        resp = openai.audio.transcriptions.create(
+    with open(mp3_path, "rb") as f:
+        response = openai.audio.transcriptions.create(
             model="whisper-1",
-            file=audio_file,
+            file=f,
             response_format="text"
         )
-    # resp is a string when response_format="text"
-    transcript = resp if isinstance(resp, str) else resp.get("text", "")
+    transcript = response if isinstance(response, str) else response.get("text", "")
     with open(cache_file, "w") as f:
         f.write(transcript)
+
     return transcript
 
-# 2 – Compute audio metrics
-def audio_metrics(mp3_path: str):
-    """Return words-per-minute, silence ratio, transcript, duration"""
+
+def analyze_audio(mp3_path: str) -> Tuple[float, float, str, float]:
+    """
+    Returns WPM, silence ratio, transcript, and duration.
+    """
     y, sr = librosa.load(mp3_path, sr=16000, mono=True)
     duration = len(y) / sr
 
-    transcript = transcribe(mp3_path)
+    transcript = transcribe_audio(mp3_path)
     words = transcript.split()
     wpm = len(words) / (duration / 60) if duration else 0
 
@@ -87,8 +96,12 @@ def audio_metrics(mp3_path: str):
 
     return wpm, silence_ratio, transcript, duration
 
-# 3 – Build prompt
-def build_prompt(transcript: str, wpm: float, silence: float, duration: float) -> str:
+
+def build_vc_prompt(transcript: str, wpm: float, silence: float, duration: float) -> str:
+    """
+    Composes the full prompt with transcript and metrics.
+    """
+    rubric = RUBRIC_TEMPLATE.format(duration=duration / 60)
     return f"""
 Pitch transcript:
 {transcript}
@@ -97,35 +110,47 @@ Audio metrics:
 • Words-per-minute: {wpm:.1f}
 • Pause ratio: {silence:.1%}
 
-{RUBRIC.replace("{{duration}}", f"{duration/60:.1f}")}
-"""
+{rubric}
+""".strip()
 
-# 4 – Grade the pitch
-def grade_pitch(mp3_path: str) -> dict:
-    wpm, silence, transcript, duration = audio_metrics(mp3_path)
-    prompt = build_prompt(transcript, wpm, silence, duration)
 
-    resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
+def call_openai_chat(system: str, user: str) -> str:
+    """
+    Sends the prompt to OpenAI and returns the raw response.
+    """
+    response = openai.chat.completions.create(
+        model=DEFAULT_MODEL,
         messages=[
-            {"role": "system", "content": "You are a helpful pitch grader."},
-            {"role": "user",   "content": prompt}
+            {"role": "system", "content": system},
+            {"role": "user", "content": user}
         ],
-        temperature=0,
-        seed=42
+        temperature=DEFAULT_TEMPERATURE,
+        seed=DEFAULT_SEED
     )
-    raw = resp.choices[0].message.content
-    single = raw.replace("\n", " ")
+    return response.choices[0].message.content
+
+
+def parse_llm_response(content: str) -> Optional[dict]:
+    """
+    Parses JSON response from the LLM.
+    """
+    content = content.replace("\n", " ").strip()
+    if content.startswith("```"):
+        content = content.split("```")[1].strip()
+
     try:
-        return json.loads(single)
+        return json.loads(content)
     except json.JSONDecodeError:
-        return {"error": "Invalid JSON", "raw": raw}
+        print("Error: Could not parse LLM response.")
+        print("Raw response:", content)
+        return None
 
-# 5 – Entry point
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python vc_grader_v3.py <path/to/pitch.mp3>")
-        sys.exit(1)
 
-    result = grade_pitch(sys.argv[1])
-    print(json.dumps(result, indent=2))
+def grade_pitch(mp3_path: str) -> Optional[dict]:
+    """
+    Main grading function for VC pitches.
+    """
+    wpm, silence, transcript, duration = analyze_audio(mp3_path)
+    prompt = build_vc_prompt(transcript, wpm, silence, duration)
+    raw_response = call_openai_chat("You are a helpful pitch grader.", prompt)
+    return parse_llm_response(raw_response)
