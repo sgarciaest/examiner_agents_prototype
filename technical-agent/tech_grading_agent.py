@@ -8,12 +8,12 @@ load_dotenv()   # looks for a file named “.env” in cwd
 assert os.getenv("OPENAI_API_KEY"), "Missing OPENAI_API_KEY in environment"
 
 # 2. Grading function (LLM-powered)
-def grade_exam(questions_markdown, answers_text, rubric_markdown=None, model="gpt-4-0125-preview"):
+def grade_exam(questions_markdown, answers_text, rubric_markdown=None):
     # Prepare the prompt
-    prompt = f"""
+    system_message = """
 You are a grading assistant for technical exams. Your role is to evaluate student responses based on the provided questions and, if available, the rubric.
 
-### Grading Instructions:
+Grading Instructions:
 - For each question:
   - Read the question and the student's answer.
   - If a rubric is provided for that question, follow it carefully to assign points based on the expected criteria.
@@ -27,21 +27,22 @@ You are a grading assistant for technical exams. Your role is to evaluate studen
   - Explain why the student received the score.
   - Offer suggestions for improvement if the answer is incomplete or incorrect.
 
-### Output Format:
 Respond ONLY with raw JSON (no markdown):
-{{
-  "question_1": {{
+{
+  "question_1": {
     "score": X,
     "feedback": "..."
-  }},
-  "question_2": {{
+  },
+  "question_2": {
     "score": Y,
     "feedback": "..."
-  }},
+  },
   ...
   "total_score": Z
-}}
+}
+"""
 
+    user_message = f"""
 ### Rubric (if available):
 {rubric_markdown or "No rubric provided."}
 
@@ -54,13 +55,16 @@ Respond ONLY with raw JSON (no markdown):
 
     # 3. Call OpenAI LLM
     response = openai.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ],
         temperature=0,
         top_p=1,
         presence_penalty=0,
         frequency_penalty=0,
-        # seed=42
+        seed=42
     )
 
     # 4. Parse LLM response (strip markdown)
